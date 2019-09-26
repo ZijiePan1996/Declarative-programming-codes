@@ -1,0 +1,178 @@
+-- File    : Proj1.hs
+-- Author  : Zijie Pan 1059454
+-- Origin  : 11:47 AM Tue Apr 9th 2019
+-- Purpose : Implementation of COMP90048 Project 1 , the Musician game.
+
+-- The 'Musician' game is a two-player logical guessing game, it is similar  
+-- to the famous Bulls and Cows game. In the 'Musician' game, the 'composer'
+-- must choose a 'chord', which is composed of three pitches. A pitch consists
+-- of a Note (A to G) and an octave (1 to 3). The 'performer' must guess a ch-
+-- ord each time. The game ends when the performer gets the correct chord.
+
+-- Greedy algorithm is used to solve this problem. At each step, the performer
+-- chooses a guess that will leave a minimal remaining target at average. 
+
+module Proj1 (Pitch, GameState, toPitch, feedback, 
+              initialGuess, nextGuess) where
+
+import Data.List
+import Data.Maybe
+
+
+-- Construct data structures for Pitches. A Pitch is consists of a note and an
+-- octave. 
+-- The data structure and idea is from stackoverflow.com/questions/33785138
+
+data Note = A | B | C | D | E | F | G deriving (Bounded, Enum, Eq, Ord)
+notes = ['A'..'G']
+
+instance Show Note where
+    show note = [notes !! fromEnum note]
+
+
+data Octave = One | Two | Three  deriving (Bounded, Enum, Eq, Ord)
+octaves = ['1'..'3']
+
+instance Show Octave where
+    show octave = [ octaves !! fromEnum octave]
+
+
+data Pitch = Pitch { note :: Note, octave :: Octave }
+    deriving (Bounded, Eq, Ord)
+
+instance Show Pitch where
+    show (Pitch note octave) = show note ++ show octave 
+
+instance Enum Pitch where
+    toEnum m =  let 
+                (n,o) = divMod m 3
+                in Pitch (toEnum n) (toEnum o) 
+                    
+    fromEnum (Pitch n o) = (length octaves) * (fromEnum n) + (fromEnum o)
+
+-- Gamestate is a list of chords, where a chord is composed of three pitches.
+-- Thus The type of gamestate is list of list of pitches.
+type GameState = [[Pitch]]
+
+
+
+-- This function takes a pitch and converts it to a string. For example, if
+-- the input pitch is a = Pitch A One, the output string will be "A1".
+convertString :: Pitch -> String 
+convertString a = convertedNote : convertedOctave : []
+    where 
+        -- extract note and octave from Pitch 
+        convertedNote   = notes   !! fromEnum (note a)
+        convertedOctave = octaves !! fromEnum (octave a)
+
+-- This function reads a string and test if it is a valid Pitch. A valid pitch
+-- should be composed of a valid note (A to G) and a valid octave (1 to 3). 
+toPitch :: String -> Maybe Pitch
+toPitch a 
+    | ((elem (head a) ['A'..'G'])) && ((elem (last a) "123"))
+      && length a == 2 = Just (Pitch n o)
+    | otherwise        = Nothing
+    where
+        -- convert the first character of the string to the Note type ,
+        -- convert the second character to the Octave type.
+        noteIndex   = fromJust $ elemIndex (head a) ['A'..'G']
+        octaveIndex = fromJust $ elemIndex (last a) ['1'..'3']
+        n = toEnum noteIndex   :: Note 
+        o = toEnum octaveIndex :: Octave
+
+
+-- This function compares two chords and generates  feedback. The feedback 
+-- is composed of three Ints. The first Int indicates how many pitches are 
+-- exactly same, the second indicates how many pitches have correct note but 
+-- wrong octave, the third shows how many pitches have correct octave but 
+-- wrong note.
+feedback :: [Pitch] -> [Pitch] -> (Int, Int, Int)
+feedback target guess = (exactAnswer, correctNote, correctOctave)
+    where 
+        exactAnswer     = length $ intersect target guess
+        targetNotes     = map  (head.convertString) target
+        guessNotes      = map  (head.convertString) guess
+        correctNote     = length (mutual targetNotes guessNotes)
+                        - exactAnswer
+        targetOctaves   = map  (last.convertString) target      
+        guessOctaves    = map  (last.convertString) guess
+        correctOctave   = length (mutual targetOctaves guessOctaves)
+                        - exactAnswer
+        -- compare two lists and find the mutuals of the two lists. The 
+        -- built-in "intersect" function is not working here because 
+        -- intersect a b will find all elements in a that is elements of 
+        -- b, thus intersect "AAA" "ABA" = "AAA", but what we want is "AA".
+        mutual :: Eq a => [a] -> [a] -> [a]
+        mutual [] _ = []
+        mutual (x : xs) ys 
+            | elem x ys = x : mutual xs (delete x ys)
+            | otherwise = mutual xs ys
+
+
+
+-- To initialise the game, first create a game state that contains all possible
+-- combinations of all pitches, which is C(21,3) = 1330 possible combinations. 
+-- To reduce the run time complexity of our program, we must find an optimal 
+-- initial guess. This was done by using the nextGuess function on all 1330 pos-
+-- sible chord. Results showed that chords that contain three different notes 
+-- and two different octaves have fewest average remaining candidates. An exam-
+-- ple is "D1, E2, F2". Here we choose initial guess as "A1, B1, C2".
+initialGuess :: ([Pitch], GameState)
+initialGuess = (guess, initialstate)
+    where 
+        allpitches   = [minBound..maxBound]::[Pitch]
+        combinations = [[x,y,z] | x <- allpitches, y <- allpitches, 
+                                  z <- allpitches, x < y, y < z]
+        guess        = [Pitch A One, Pitch B One, Pitch C Two]
+        initialstate = combinations \\ [guess]
+
+
+-- The nextGuess function takes previous guess, current gamestate, and feedback
+-- of previous guess as input. Where the output is a new state which only cont-
+-- ains chords that have same feedback with previous guess. For example, if the
+-- previous guess is [A1, B1, C2], and the feedback is (0, 0, 0), then we will 
+-- filter all chords which have no same pitches and octaves with [A1, B1, C2].
+nextGuess :: ([Pitch], GameState) -> (Int, Int, Int) -> ([Pitch], GameState)
+nextGuess (guess, currState) currFeedback = (nextGuess, newState)
+    where
+        newState'  = filter (\x -> feedback guess x == currFeedback) currState
+        newState   = newState' \\ [guess]
+        nextGuess  = optimalGuess newState'
+
+-- The optimalGuess function takes current GameState as input, the output is 
+-- the optimal chord(list of pitches). By optimal, it means that the chord that
+-- we choose should have the smallest amount of average remaining candidates. 
+-- We doing so by conducting the getAvg function on all chords of the current 
+-- state.
+optimalGuess :: GameState -> [Pitch]
+optimalGuess state = optimal
+    where 
+        feedbackList = [(potentialTar, getAvg potentialTar state)
+                        | potentialTar <- state]
+        -- For each chord of current game state, calculate the 
+        -- average remaining candidates and rank them. 
+        optimal      = fst $ foldl1 min feedbackList
+
+-- Get average remaining candidates for a given chord in the current game 
+-- state. This is represented as ∑(a*a/N), where a is a group of chords that 
+-- share same feedback value, N is the total number of remaining candidates.
+getAvg :: [Pitch] -> GameState -> Double
+getAvg potentialTar state
+    = sum [(a * a / (sum sortList)) | a <- sortList]
+    where
+        allCands  = (fromIntegral . length) state
+        feedbacks = map (feedback potentialTar) state
+        sortGroup = (group . sort) feedbacks
+        sortList  = map (fromIntegral . length) sortGroup
+
+
+
+
+
+
+
+
+
+
+
+
